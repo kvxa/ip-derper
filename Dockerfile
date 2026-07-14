@@ -1,4 +1,4 @@
-FROM golang:latest AS builder
+FROM golang:1.26 AS builder
 
 LABEL org.opencontainers.image.source https://github.com/yangchuansheng/ip_derper
 

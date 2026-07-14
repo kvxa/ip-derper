@@ -1,4 +1,4 @@
-name: Disable Checking ServerName
+name: Build and publish image
 
 on:
   workflow_dispatch:
@@ -6,50 +6,53 @@ on:
     branches:
       - main
   pull_request:
-    branches: [ main ]
-  pull_request_target:
-    types: [assigned, opened, synchronize, reopened]
+    branches:
+      - main
+
+permissions:
+  contents: read
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
 
-      - name: modify
-        run: |
-          cd tailscale
-          sed -i '/hi.ServerName != m.hostname/,+2d' cmd/derper/cert.go
+      - name: Disable manual certificate hostname check
+        run: sed -i '/hi.ServerName != m.hostname/,+2d' tailscale/cmd/derper/cert.go
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v1
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v1
+        uses: docker/setup-buildx-action@v3
 
-      - name: Login to DockerHub
-        uses: docker/login-action@v2
+      - name: Log in to SWR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-          
-      - name: Login to ghcr.io
-        uses: docker/login-action@v2
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GHCR_TOKEN }}
+          registry: ${{ secrets.SWR_REGISTRY }}
+          username: ${{ secrets.SWR_USERNAME }}
+          password: ${{ secrets.SWR_PASSWORD }}
 
-      # Runs a single command using the runners shell
-      - name: Build and push Docker images to docker.io and ghcr.io
-        uses: docker/build-push-action@v2
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
         with:
-          file: 'Dockerfile'
-          platforms: linux/amd64
-          context: ./
-          push: true
+          images: ${{ secrets.SWR_REGISTRY }}/${{ secrets.SWR_NAMESPACE }}/ip-derper
           tags: |
-            yangchuansheng/ip_derper:latest
-            ghcr.io/yangchuansheng/ip_derper:latest
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=sha
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

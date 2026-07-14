@@ -1,38 +1,71 @@
-name: 'Submodules Sync'
+name: Update Tailscale
 
 on:
   schedule:
-  - cron: "0 2 * * *"
-  # Allows you to run this workflow manually from the Actions tab or through HTTP API
+    - cron: '0 3 * * 1'
   workflow_dispatch:
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
-  sync:
-    name: 'Submodules Sync'
+  update:
     runs-on: ubuntu-latest
-
-    # Use the Bash shell regardless whether the GitHub Actions runner is ubuntu-latest, macos-latest, or windows-latest
-    defaults:
-      run:
-        shell: bash
-
     steps:
-    # Checkout the repository to the GitHub Actions runner
-    - name: Checkout
-      uses: actions/checkout@v3
-      with:
-        token: ${{ secrets.CI_TOKEN }}
-        submodules: true
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
 
-    # Update references
-    - name: Git Sumbodule Update
-      run: |
-        git pull --recurse-submodules
-        git submodule update --remote --recursive
+      - name: Update to latest stable Tailscale release
+        id: tailscale
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          latest_tag="$(gh api repos/tailscale/tailscale/releases/latest --jq .tag_name)"
+          [[ "$latest_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
 
-    - name: Commit update
-      run: |
-        git config --global user.name 'Git bot'
-        git config --global user.email 'bot@noreply.github.com'
-        git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
-        git commit -am "Auto updated submodule references" && git push || echo "No changes to commit"
+          current_commit="$(git -C tailscale rev-parse HEAD)"
+          current_tag="$(git -C tailscale describe --tags --exact-match HEAD 2>/dev/null || true)"
+          if [[ "$current_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            && [ "$(printf '%s\n%s\n' "$current_tag" "$latest_tag" | sort -V | tail -n 1)" != "$latest_tag" ]; then
+            echo "tag=$latest_tag" >> "$GITHUB_OUTPUT"
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git -C tailscale fetch --depth=1 origin "refs/tags/$latest_tag:refs/tags/$latest_tag"
+          git -C tailscale checkout --detach "$latest_tag"
+          updated_commit="$(git -C tailscale rev-parse HEAD)"
+
+          echo "tag=$latest_tag" >> "$GITHUB_OUTPUT"
+          if [ "$current_commit" != "$updated_commit" ]; then
+            echo "updated=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create update pull request
+        if: steps.tailscale.outputs.updated == 'true'
+        uses: peter-evans/create-pull-request@v7
+        id: create-pr
+        with:
+          token: ${{ secrets.CI_TOKEN }}
+          branch: automation/update-tailscale
+          delete-branch: true
+          commit-message: 'chore: update Tailscale to ${{ steps.tailscale.outputs.tag }}'
+          title: 'chore: update Tailscale to ${{ steps.tailscale.outputs.tag }}'
+          body: |
+            Updates the Tailscale submodule to the latest stable release.
+
+            The pull request workflow builds the image. Merging it publishes the image to SWR.
+
+      - name: Enable automatic merge
+        if: steps.tailscale.outputs.updated == 'true'
+        uses: peter-evans/enable-pull-request-automerge@v3
+        with:
+          token: ${{ secrets.CI_TOKEN }}
+          pull-request-number: ${{ steps.create-pr.outputs.pull-request-number }}
+          merge-method: squash
