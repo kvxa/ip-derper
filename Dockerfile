@@ -1,8 +1,11 @@
-FROM golang:1.26 AS builder
+FROM golang:1.27 AS builder
 
 LABEL org.opencontainers.image.source https://github.com/yangchuansheng/ip_derper
 
 WORKDIR /app
+
+# let go fetch the toolchain tailscale/go.mod asks for
+ENV GOTOOLCHAIN=auto
 
 ADD tailscale /app/tailscale
 
