@@ -2,7 +2,7 @@ name: Update Tailscale
 
 on:
   schedule:
-    - cron: '0 3 */3 * *'
+    - cron: '0 3 * * *'
   workflow_dispatch:
 
 permissions:
